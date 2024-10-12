@@ -19,7 +19,7 @@
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/protobufjs@6.11.2/dist/protobuf.min.js"></script>
     <script>
-        const apiKey = '424c69ac6f444e08bc367ad861c4e4ac'; // Ersätt med din Trafiklab API-nyckel
+        const apiKey = '5fd9aa42114c425682513d9f406e8408'; // Ersätt med din Trafiklab API-nyckel
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
 
         const map = L.map('map').setView([59.3293, 18.0686], 12); // Default position: Stockholm
@@ -30,7 +30,7 @@
         fetch(vehiclePositionsURL)
             .then(response => response.arrayBuffer())
             .then(buffer => {
-                protobuf.load("https://raw.githubusercontent.com/google/transit/f09941e239f0fd48e8ceaeef0195bbe4c632064b/gtfs-realtime/proto/gtfs-realtime.proto", function(err, root) {
+                protobuf.load("https://raw.githubusercontent.com/google/transit/master/gtfs-realtime/proto/gtfs-realtime.proto", function(err, root) {
                     if (err) throw err;
                     const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
                     const message = FeedMessage.decode(new Uint8Array(buffer));
