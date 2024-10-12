@@ -30,7 +30,7 @@
         fetch(vehiclePositionsURL)
             .then(response => response.arrayBuffer())
             .then(buffer => {
-                protobuf.load("https://raw.githubusercontent.com/google/transitfeed/master/transit_realtime.proto", function(err, root) { // Ladda Protobuf-filen från en URL
+                protobuf.load("proto/GTFS-realtime.proto", function(err, root) { // Korrekt sökväg
                     if (err) throw err;
                     const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
                     const message = FeedMessage.decode(new Uint8Array(buffer));
