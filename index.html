@@ -22,7 +22,7 @@
         const apiKey = '5fd9aa42114c425682513d9f406e8408'; // Ersätt med din Trafiklab API-nyckel
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
 
-        // Specifik busslinje som ska visas, ersätt med din linje
+        // Specifik busslinje som ska visas
         const specificLine = '10'; // Exempel: Busslinje 10
 
         // Initiera kartan med Stockholm som startpunkt
@@ -44,14 +44,18 @@
                     const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
                     const message = FeedMessage.decode(new Uint8Array(buffer));
 
-                    console.log(message);  // Logga hela meddelandet för att se om data hämtas korrekt
+                    // Logga hela meddelandet för att se strukturen
+                    console.log(message);
 
                     message.entity.forEach(vehicle => {
                         if (vehicle.vehicle) {
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
-                            const line = vehicle.vehicle.label; // Hämta linjeinformation
+                            const line = vehicle.vehicle.trip.route_id; // Kontrollera detta fält
+
+                            // Logga bussernas linje-ID
+                            console.log(`Bus ID: ${busId}, Line: ${line}`);
 
                             // Kontrollera om busslinjen matchar den specifika linjen
                             if (line === specificLine) {
