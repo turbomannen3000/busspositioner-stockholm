@@ -51,14 +51,20 @@
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
-                            const routeId = vehicle.vehicle.trip.route_id; // Hämta route_id
 
-                            // Kontrollera om busslinjen matchar den specifika linjen
-                            if (routeId === specificLine) {
-                                // Lägg till markör för bussen på kartan
-                                L.marker([lat, lng]).addTo(map)
-                                    .bindPopup(`Buss ID: ${busId}, Linje: ${routeId}`)
-                                    .openPopup();
+                            // Kontrollera att trip finns och få route_id
+                            if (vehicle.vehicle.trip) {
+                                const routeId = vehicle.vehicle.trip.route_id; // Hämta route_id
+
+                                // Kontrollera om busslinjen matchar den specifika linjen
+                                if (routeId === specificLine) {
+                                    // Lägg till markör för bussen på kartan
+                                    L.marker([lat, lng]).addTo(map)
+                                        .bindPopup(`Buss ID: ${busId}, Linje: ${routeId}`)
+                                        .openPopup();
+                                }
+                            } else {
+                                console.warn(`Inga trip data för Buss ID: ${busId}`); // Logga varning om trip inte finns
                             }
                         }
                     });
