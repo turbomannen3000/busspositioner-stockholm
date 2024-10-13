@@ -23,7 +23,7 @@
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
 
         // Specifik busslinje som ska visas
-        const specificRouteId = '10'; // Exempel: Busslinje 10
+        const specificLine = '10'; // Ändra till den linje du vill filtrera på
 
         // Initiera kartan med Stockholm som startpunkt
         const map = L.map('map').setView([59.3293, 18.0686], 13);
@@ -44,21 +44,17 @@
                     const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
                     const message = FeedMessage.decode(new Uint8Array(buffer));
 
-                    // Logga hela meddelandet för att se strukturen
-                    console.log(message);
+                    console.log(message); // Logga hela meddelandet för att se om data hämtas korrekt
 
                     message.entity.forEach(vehicle => {
                         if (vehicle.vehicle) {
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
-                            const routeId = vehicle.vehicle.trip.route_id; // Använd route_id
-
-                            // Logga bussernas linje-ID
-                            console.log(`Bus ID: ${busId}, Route: ${routeId}`);
+                            const routeId = vehicle.vehicle.trip.route_id; // Hämta route_id
 
                             // Kontrollera om busslinjen matchar den specifika linjen
-                            if (routeId === specificRouteId) {
+                            if (routeId === specificLine) {
                                 // Lägg till markör för bussen på kartan
                                 L.marker([lat, lng]).addTo(map)
                                     .bindPopup(`Buss ID: ${busId}, Linje: ${routeId}`)
@@ -69,7 +65,6 @@
                 });
             })
             .catch(error => console.error('Error fetching vehicle positions:', error));
-
     </script>
 </body>
 </html>
