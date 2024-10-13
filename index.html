@@ -13,7 +13,7 @@
     </style>
 </head>
 <body>
-    <h1>Realtidsposition för fyrans bussar i Stockholm</h1>
+    <h1>Realtidsposition för bussar i Stockholm</h1>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -32,7 +32,7 @@
         fetch(vehiclePositionsURL)
             .then(response => response.arrayBuffer())
             .then(buffer => {
-                // Ladda protobuf-filen från din GitHub Page (ersätt sökvägen om nödvändigt)
+                // Ladda protobuf-filen
                 protobuf.load("static/gtfs-realtime.proto", function(err, root) {
                     if (err) {
                         console.error('Error loading protobuf:', err);
@@ -42,16 +42,15 @@
                     const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
                     const message = FeedMessage.decode(new Uint8Array(buffer));
 
-                    console.log(message);  // Logga hela meddelandet för att se om data hämtas korrekt
-
                     message.entity.forEach(vehicle => {
                         if (vehicle.vehicle) {
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
+                            const routeId = vehicle.vehicle.trip.route_id; // Hämta linje-ID
 
-                            // Kontrollera om bussen tillhör linje 4
-                            if (busId.startsWith("4")) { // Justera detta om buss-ID:t har ett annat format
+                            // Kontrollera om bus ID tillhör linje 4
+                            if (routeId === '4') { // Endast linje 4
                                 // Lägg till markör för bussen på kartan
                                 L.marker([lat, lng]).addTo(map)
                                     .bindPopup(`Buss ID: ${busId}`)
