@@ -32,7 +32,6 @@
         fetch(vehiclePositionsURL)
             .then(response => response.arrayBuffer())
             .then(buffer => {
-                // Ladda protobuf-filen från din GitHub Page (ersätt sökvägen om nödvändigt)
                 protobuf.load("static/gtfs-realtime.proto", function(err, root) {
                     if (err) {
                         console.error('Error loading protobuf:', err);
@@ -49,11 +48,15 @@
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
+                            const routeId = vehicle.vehicle.trip.routeId;
 
-                            // Lägg till markör för bussen på kartan
-                            L.marker([lat, lng]).addTo(map)
-                                .bindPopup(`Buss ID: ${busId}`)
-                                .openPopup();
+                            // Kontrollera om routeId är busslinje 4
+                            if (routeId === '9011001000400000') { // Linje 4
+                                // Lägg till markör för bussen på kartan
+                                L.marker([lat, lng]).addTo(map)
+                                    .bindPopup(`Busslinje: 4, Buss ID: ${busId}`)
+                                    .openPopup();
+                            }
                         }
                     });
                 });
