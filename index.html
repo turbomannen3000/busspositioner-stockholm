@@ -43,6 +43,7 @@
 
                     console.log(message);  // Logga hela meddelandet för att se om data hämtas korrekt
 
+                    // Iterera över alla fordon i meddelandet
                     message.entity.forEach(vehicle => {
                         if (vehicle.vehicle && vehicle.vehicle.trip && vehicle.vehicle.trip.routeId) {
                             const lat = vehicle.vehicle.position.latitude;
