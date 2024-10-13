@@ -47,14 +47,18 @@
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
-                            const routeId = vehicle.vehicle.trip.route_id; // Hämta linje-ID
 
-                            // Kontrollera om bus ID tillhör linje 4
-                            if (routeId === '4') { // Endast linje 4
-                                // Lägg till markör för bussen på kartan
-                                L.marker([lat, lng]).addTo(map)
-                                    .bindPopup(`Buss ID: ${busId}`)
-                                    .openPopup();
+                            // Kontrollera om trip-data finns
+                            if (vehicle.vehicle.trip && vehicle.vehicle.trip.route_id) {
+                                const routeId = vehicle.vehicle.trip.route_id; // Hämta linje-ID
+
+                                // Kontrollera om bus ID tillhör linje 4
+                                if (routeId === '4') { // Endast linje 4
+                                    // Lägg till markör för bussen på kartan
+                                    L.marker([lat, lng]).addTo(map)
+                                        .bindPopup(`Buss ID: ${busId}`)
+                                        .openPopup();
+                                }
                             }
                         }
                     });
