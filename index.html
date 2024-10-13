@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Busspositioner i Stockholm</title>
+    <title>Busspositioner för linje 4 i Stockholm</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <style>
         #map {
@@ -13,7 +13,7 @@
     </style>
 </head>
 <body>
-    <h1>Realtidsposition för bussar i Stockholm</h1>
+    <h1>Realtidsposition för busslinje 4 i Stockholm</h1>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -21,6 +21,7 @@
     <script>
         const apiKey = '5fd9aa42114c425682513d9f406e8408'; // Ersätt med din Trafiklab API-nyckel
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
+        const routeIdLinje4 = '9011001000400000';  // Route ID för busslinje 4
 
         // Initiera kartan med Stockholm som startpunkt
         const map = L.map('map').setView([59.3293, 18.0686], 13); // Zoomnivå 13 för närmare vy
@@ -45,14 +46,14 @@
                     console.log(message);  // Logga hela meddelandet för att se om data hämtas korrekt
 
                     message.entity.forEach(vehicle => {
-                        if (vehicle.vehicle) {
+                        if (vehicle.vehicle && vehicle.vehicle.trip.routeId === routeIdLinje4) {
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
 
                             // Lägg till markör för bussen på kartan
                             L.marker([lat, lng]).addTo(map)
-                                .bindPopup(`Buss ID: ${busId}`)
+                                .bindPopup(`Buss ID: ${busId}, Linje: 4`)
                                 .openPopup();
                         }
                     });
