@@ -13,95 +13,54 @@
     </style>
 </head>
 <body>
-    <h1>Realtidsposition för bussar i Stockholm</h1>
+    <h1>Realtidsposition för en specifik busslinje i Stockholm</h1>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/protobufjs@6.11.2/dist/protobuf.min.js"></script>
-    
     <script>
         const apiKey = '5fd9aa42114c425682513d9f406e8408'; // Ersätt med din Trafiklab API-nyckel
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
-        
-        // Byt ut <username> med ditt GitHub-användarnamn
-        const baseURL = 'https://turbomannen3000.github.io/busspositioner-stockholm/static/';
 
+        // Initialisera kartan
         const map = L.map('map').setView([59.3293, 18.0686], 12); // Default position: Stockholm
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
         }).addTo(map);
 
-        // Hämta statiska data
-        fetch(`${baseURL}routes.txt`)
-            .then(response => response.text())
-            .then(routesData => {
-                const routes = parseCSV(routesData);
-                console.log(routes);
-            })
-            .catch(error => console.error('Error fetching routes:', error));
+        // Ladda protobuf-filen från GitHub
+        protobuf.load("https://raw.githubusercontent.com/google/transit/f09941e239f0fd48e8ceaeef0195bbe4c632064b/gtfs-realtime/proto/gtfs-realtime.proto", function(err, root) {
+            if (err) {
+                console.error('Error loading protobuf:', err);
+                return;
+            }
 
-        fetch(`${baseURL}stops.txt`)
-            .then(response => response.text())
-            .then(stopsData => {
-                const stops = parseCSV(stopsData);
-                console.log(stops);
-            })
-            .catch(error => console.error('Error fetching stops:', error));
+            const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
 
-        fetch(`${baseURL}trips.txt`)
-            .then(response => response.text())
-            .then(tripsData => {
-                const trips = parseCSV(tripsData);
-                console.log(trips);
-            })
-            .catch(error => console.error('Error fetching trips:', error));
-
-        fetch(`${baseURL}stop_times.txt`)
-            .then(response => response.text())
-            .then(stopTimesData => {
-                const stopTimes = parseCSV(stopTimesData);
-                console.log(stopTimes);
-            })
-            .catch(error => console.error('Error fetching stop times:', error));
-
-        // Hämta realtidsdata
-        fetch(vehiclePositionsURL)
-            .then(response => response.arrayBuffer())
-            .then(buffer => {
-                protobuf.load("https://raw.githubusercontent.com/google/transit/f09941e239f0fd48e8ceaeef0195bbe4c632064b/gtfs-realtime/proto/gtfs-realtime.proto", function(err, root) {
-                    if (err) throw err;
-                    const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
+            // Hämta realtidsdata för bussar
+            fetch(vehiclePositionsURL)
+                .then(response => response.arrayBuffer())
+                .then(buffer => {
                     const message = FeedMessage.decode(new Uint8Array(buffer));
 
+                    // Filtrera bussar för en specifik linje (t.ex. linje 4)
+                    const lineNumber = "4"; // Specificera önskad busslinje
+
                     message.entity.forEach(vehicle => {
-                        if (vehicle.vehicle) {
+                        if (vehicle.vehicle && vehicle.vehicle.trip && vehicle.vehicle.trip.routeId === lineNumber) {
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
-                            L.marker([lat, lng]).addTo(map);
+                            const busId = vehicle.vehicle.vehicle.id;
+
+                            // Lägg till markör för bussen på kartan
+                            L.marker([lat, lng]).addTo(map)
+                                .bindPopup(`Buss ID: ${busId}, Linje: ${lineNumber}`)
+                                .openPopup();
                         }
                     });
-                });
-            })
-            .catch(error => console.error('Error fetching protobuf data:', error));
-
-        // Funktion för att parsa CSV-data
-        function parseCSV(data) {
-            const rows = data.split('\n');
-            const headers = rows[0].split(',');
-            const result = [];
-
-            for (let i = 1; i < rows.length; i++) {
-                const obj = {};
-                const currentRow = rows[i].split(',');
-
-                headers.forEach((header, j) => {
-                    obj[header.trim()] = currentRow[j].trim();
-                });
-
-                result.push(obj);
-            }
-            return result;
-        }
+                })
+                .catch(error => console.error('Error fetching vehicle positions:', error));
+        });
     </script>
 </body>
 </html>
