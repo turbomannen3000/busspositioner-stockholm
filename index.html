@@ -23,7 +23,7 @@
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
 
         // Specifik busslinje som ska visas
-        const specificLine = '10'; // Exempel: Busslinje 10
+        const specificRouteId = '10'; // Exempel: Busslinje 10
 
         // Initiera kartan med Stockholm som startpunkt
         const map = L.map('map').setView([59.3293, 18.0686], 13);
@@ -52,16 +52,16 @@
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
-                            const line = vehicle.vehicle.trip.route_id; // Kontrollera detta fält
+                            const routeId = vehicle.vehicle.trip.route_id; // Använd route_id
 
                             // Logga bussernas linje-ID
-                            console.log(`Bus ID: ${busId}, Line: ${line}`);
+                            console.log(`Bus ID: ${busId}, Route: ${routeId}`);
 
                             // Kontrollera om busslinjen matchar den specifika linjen
-                            if (line === specificLine) {
+                            if (routeId === specificRouteId) {
                                 // Lägg till markör för bussen på kartan
                                 L.marker([lat, lng]).addTo(map)
-                                    .bindPopup(`Buss ID: ${busId}, Linje: ${line}`)
+                                    .bindPopup(`Buss ID: ${busId}, Linje: ${routeId}`)
                                     .openPopup();
                             }
                         }
@@ -69,6 +69,7 @@
                 });
             })
             .catch(error => console.error('Error fetching vehicle positions:', error));
+
     </script>
 </body>
 </html>
