@@ -22,8 +22,11 @@
         const apiKey = '5fd9aa42114c425682513d9f406e8408'; // Ersätt med din Trafiklab API-nyckel
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
 
+        // Specifik busslinje som ska visas, ersätt med din linje
+        const specificLine = '10'; // Exempel: Busslinje 10
+
         // Initiera kartan med Stockholm som startpunkt
-        const map = L.map('map').setView([59.3293, 18.0686], 13); // Zoomnivå 13 för närmare vy
+        const map = L.map('map').setView([59.3293, 18.0686], 13);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
         }).addTo(map);
@@ -32,7 +35,6 @@
         fetch(vehiclePositionsURL)
             .then(response => response.arrayBuffer())
             .then(buffer => {
-                // Ladda protobuf-filen från din GitHub Page (ersätt sökvägen om nödvändigt)
                 protobuf.load("static/gtfs-realtime.proto", function(err, root) {
                     if (err) {
                         console.error('Error loading protobuf:', err);
@@ -49,17 +51,20 @@
                             const lat = vehicle.vehicle.position.latitude;
                             const lng = vehicle.vehicle.position.longitude;
                             const busId = vehicle.vehicle.vehicle.id;
+                            const line = vehicle.vehicle.label; // Hämta linjeinformation
 
-                            // Lägg till markör för bussen på kartan
-                            L.marker([lat, lng]).addTo(map)
-                                .bindPopup(`Buss ID: ${busId}`)
-                                .openPopup();
+                            // Kontrollera om busslinjen matchar den specifika linjen
+                            if (line === specificLine) {
+                                // Lägg till markör för bussen på kartan
+                                L.marker([lat, lng]).addTo(map)
+                                    .bindPopup(`Buss ID: ${busId}, Linje: ${line}`)
+                                    .openPopup();
+                            }
                         }
                     });
                 });
             })
             .catch(error => console.error('Error fetching vehicle positions:', error));
-
     </script>
 </body>
 </html>
