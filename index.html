@@ -46,15 +46,23 @@
                     console.log(message);  // Logga hela meddelandet för att se om data hämtas korrekt
 
                     message.entity.forEach(vehicle => {
-                        if (vehicle.vehicle && vehicle.vehicle.trip.routeId === routeIdLinje4) {
-                            const lat = vehicle.vehicle.position.latitude;
-                            const lng = vehicle.vehicle.position.longitude;
-                            const busId = vehicle.vehicle.vehicle.id;
+                        if (vehicle.vehicle && vehicle.vehicle.trip && vehicle.vehicle.trip.routeId) {
+                            const routeId = vehicle.vehicle.trip.routeId;
+                            console.log(`Bus Route ID: ${routeId}`);  // Logga alla route IDs
 
-                            // Lägg till markör för bussen på kartan
-                            L.marker([lat, lng]).addTo(map)
-                                .bindPopup(`Buss ID: ${busId}, Linje: 4`)
-                                .openPopup();
+                            // Kontrollera om routeId matchar linje 4
+                            if (routeId === routeIdLinje4) {
+                                const lat = vehicle.vehicle.position.latitude;
+                                const lng = vehicle.vehicle.position.longitude;
+                                const busId = vehicle.vehicle.vehicle.id;
+
+                                // Lägg till markör för bussen på kartan
+                                L.marker([lat, lng]).addTo(map)
+                                    .bindPopup(`Buss ID: ${busId}, Linje: 4`)
+                                    .openPopup();
+                            }
+                        } else {
+                            console.log('Ingen routeId hittades för detta fordon.');
                         }
                     });
                 });
