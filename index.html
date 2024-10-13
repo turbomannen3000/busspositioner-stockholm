@@ -19,7 +19,7 @@
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/protobufjs@6.11.2/dist/protobuf.min.js"></script>
     <script>
-        const apiKey = '5fd9aa42114c425682513d9f406e8408'; // Ersätt med din Trafiklab API-nyckel
+        const apiKey = 'DIN_API_NYCKEL'; // Ersätt med din Trafiklab API-nyckel
         const vehiclePositionsURL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${apiKey}`;
 
         // Initialisera kartan
@@ -28,8 +28,8 @@
             maxZoom: 19,
         }).addTo(map);
 
-        // Ladda protobuf-filen från GitHub
-        protobuf.load("https://raw.githubusercontent.com/google/transit/f09941e239f0fd48e8ceaeef0195bbe4c632064b/gtfs-realtime/proto/gtfs-realtime.proto", function(err, root) {
+        // Ladda protobuf-filen från din statiska mapp
+        protobuf.load("static/gtfs-realtime.proto", function(err, root) {
             if (err) {
                 console.error('Error loading protobuf:', err);
                 return;
