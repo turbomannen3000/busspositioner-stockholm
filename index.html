@@ -17,12 +17,12 @@
     <div id="positions">Laddar positioner...</div>
 
     <script>
+        const apiUrl = 'http://192.168.0.172:5000/fetch_vehicle_positions'; // URL till din Flask-applikation
         const busLine = '9011001000400000'; // route_id för buss 4
 
         async function fetchBusPositions() {
             try {
-                // Hämta data från Flask-servern
-                const response = await fetch('http://192.168.0.172:5000/fetch_vehicle_positions'); // Byt ut med din Flask-server IP
+                const response = await fetch(apiUrl);
                 if (!response.ok) throw new Error('Nätverksfel: ' + response.status);
                 
                 const data = await response.json();
