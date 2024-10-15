@@ -22,7 +22,7 @@
         async function fetchBusPositions() {
             try {
                 // Hämta data från Flask-servern
-                const response = await fetch('http://127.0.0.1:5000/fetch_vehicle_positions'); // Byt ut med din Flask-server IP
+                const response = await fetch('http://192.168.0.172:5000/fetch_vehicle_positions'); // Byt ut med din Flask-server IP
                 if (!response.ok) throw new Error('Nätverksfel: ' + response.status);
                 
                 const data = await response.json();
