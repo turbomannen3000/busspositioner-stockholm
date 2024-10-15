@@ -17,12 +17,12 @@
     <div id="positions">Laddar positioner...</div>
 
     <script>
-        const apiKey = '5fd9aa42114c425682513d9f406e8408'; // Ersätt med din API-nyckel
         const busLine = '9011001000400000'; // route_id för buss 4
 
         async function fetchBusPositions() {
             try {
-                const response = await fetch(`https://api.trafiklab.se/gtfs-realtime/v1/vehiclepositions?key=${apiKey}`);
+                // Hämta data från Flask-servern
+                const response = await fetch('http://127.0.0.1:5000/fetch_vehicle_positions'); // Byt ut med din Flask-server IP
                 if (!response.ok) throw new Error('Nätverksfel: ' + response.status);
                 
                 const data = await response.json();
