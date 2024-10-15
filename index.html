@@ -3,56 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Buss 4 Positioner</title>
+    <title>Busspositioner i Stockholm</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <style>
-        /* Grundläggande CSS för att styla positionerna */
-        #positions {
-            font-family: Arial, sans-serif;
-            margin: 20px;
+        #map {
+            height: 500px;
+            width: 100%;
         }
     </style>
 </head>
 <body>
-    <h1>Buss 4 Positioner</h1>
-    <div id="positions">Laddar positioner...</div>
+    <h1>Realtidsposition för bussar i Stockholm</h1>
+    <div id="map"></div>
 
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/protobufjs@6.11.2/dist/protobuf.min.js"></script>
     <script>
-        const apiUrl = 'http://192.168.0.172:5000/fetch_vehicle_positions'; // URL till din Flask-applikation
-        const busLine = '9011001000400000'; // route_id för buss 4
+        const fetchVehiclePositionsURL = 'http://192.168.0.172:5000/fetch_vehicle_positions'; // URL till Flask-API:et
 
-        async function fetchBusPositions() {
-            try {
-                const response = await fetch(apiUrl);
+        // Initiera kartan med Stockholm som startpunkt
+        const map = L.map('map').setView([59.3293, 18.0686], 13); // Zoomnivå 13 för närmare vy
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+        }).addTo(map);
+
+        // Funktion för att hämta busspositioner från Flask-API:et
+        fetch(fetchVehiclePositionsURL)
+            .then(response => {
                 if (!response.ok) throw new Error('Nätverksfel: ' + response.status);
-                
-                const data = await response.json();
-                displayBusPositions(data.entity);
-            } catch (error) {
-                document.getElementById('positions').innerText = 'Fel vid hämtning av data: ' + error.message;
-            }
-        }
+                return response.json();
+            })
+            .then(data => {
+                console.log(data);  // Logga hela meddelandet för att se om data hämtas korrekt
 
-        function displayBusPositions(entities) {
-            const positionsDiv = document.getElementById('positions');
-            positionsDiv.innerHTML = ''; // Töm tidigare innehåll
+                data.forEach(vehicle => {
+                    if (vehicle.vehicle) {
+                        const lat = vehicle.vehicle.position.latitude;
+                        const lng = vehicle.vehicle.position.longitude;
+                        const busId = vehicle.vehicle.id;
 
-            entities.forEach(entity => {
-                if (entity.vehicle && entity.vehicle.trip && entity.vehicle.trip.route_id === busLine) {
-                    const position = entity.vehicle.position;
-                    const timestamp = new Date(entity.vehicle.timestamp * 1000).toLocaleString();
+                        // Lägg till markör för bussen på kartan
+                        L.marker([lat, lng]).addTo(map)
+                            .bindPopup(`Buss ID: ${busId}`)
+                            .openPopup();
+                    }
+                });
+            })
+            .catch(error => console.error('Fel vid hämtning av busspositioner:', error));
 
-                    positionsDiv.innerHTML += `<p>Buss ID: ${entity.vehicle.id}, Position: (${position.latitude}, ${position.longitude}), Tid: ${timestamp}</p>`;
-                }
-            });
-
-            if (positionsDiv.innerHTML === '') {
-                positionsDiv.innerText = 'Inga positioner för buss 4 hittades.';
-            }
-        }
-
-        // Hämta positioner varje 30 sekunder
-        fetchBusPositions();
-        setInterval(fetchBusPositions, 30000);
     </script>
 </body>
 </html>
