@@ -25,45 +25,76 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pbf@3.2.1/dist/pbf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/gtfs-realtime-bindings@0.0.6/browser/gtfs-realtime-bindings.js"></script>
-  <script>
-  const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev/";
-  const API_URL = "https://opendata.samtrafiken.se/gtfs-rt-sweden/sl/VehiclePositionsSweden.pb?key=424c69ac6f444e08bc367ad861c4e4ac";
+ <script>
+const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev/";
+const API_URL = "https://opendata.samtrafiken.se/gtfs-rt-sweden/sl/VehiclePositionsSweden.pb?key=424c69ac6f444e08bc367ad861c4e4ac";
+const ROUTES_URL = "./static/routes.txt"; // du lägger denna i din repo
 
-  const map = L.map("map").setView([59.3293, 18.0686], 12);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap"
-  }).addTo(map);
+const map = L.map("map").setView([59.3293, 18.0686], 12);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "© OpenStreetMap"
+}).addTo(map);
 
-  let markers = [];
+let markers = [];
+let routeMap = new Map();
 
-  async function fetchPositions(line) {
-    const url = `${API_PROXY}/?url=${encodeURIComponent(API_URL)}`;
-    const res = await fetch(url);
-    const buf = await res.arrayBuffer();
-    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Pbf(buf));
-    const vehicles = feed.entity
-      .filter(e => e.vehicle?.trip?.routeId?.includes(line))
-      .map(e => e.vehicle);
+// Steg 1: Läs in routes.txt
+async function loadRoutes() {
+  const res = await fetch(ROUTES_URL);
+  const text = await res.text();
+  const lines = text.split("\n").slice(1);
+  for (let l of lines) {
+    const cols = l.split(",");
+    const route_id = cols[0];
+    const route_short_name = cols[2];
+    if (route_id && route_short_name) {
+      routeMap.set(route_short_name.trim(), route_id.trim());
+    }
+  }
+  console.log("Routes inlästa:", routeMap.size);
+}
 
-    // rensa gamla markörer
-    markers.forEach(m => map.removeLayer(m));
-    markers = [];
-
-    vehicles.forEach(v => {
-      const lat = v.position.latitude;
-      const lon = v.position.longitude;
-      const marker = L.marker([lat, lon])
-        .addTo(map)
-        .bindPopup(`Linje ${line}<br>Fordon: ${v.vehicle.id}`);
-      markers.push(marker);
-    });
+// Steg 2: Hämta fordon
+async function fetchPositions(line) {
+  const routeId = routeMap.get(line);
+  if (!routeId) {
+    alert("Ingen linje med det numret hittades i routes.txt");
+    return;
   }
 
-  document.querySelector("#line-form").addEventListener("submit", e => {
-    e.preventDefault();
-    const line = document.querySelector("#line").value;
-    fetchPositions(line);
+  const url = `${API_PROXY}/?url=${encodeURIComponent(API_URL)}`;
+  const res = await fetch(url);
+  const buf = await res.arrayBuffer();
+  const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Pbf(buf));
+  const vehicles = feed.entity
+    .filter(e => e.vehicle?.trip?.routeId === routeId)
+    .map(e => e.vehicle);
+
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+
+  if (vehicles.length === 0) {
+    alert("Inga fordon hittades för linje " + line);
+  }
+
+  vehicles.forEach(v => {
+    const lat = v.position.latitude;
+    const lon = v.position.longitude;
+    const marker = L.marker([lat, lon])
+      .addTo(map)
+      .bindPopup(`Linje ${line}<br>Fordon: ${v.vehicle.id}`);
+    markers.push(marker);
   });
-  </script>
+}
+
+// Start
+loadRoutes();
+
+document.querySelector("#line-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const line = document.querySelector("#line").value.trim();
+  fetchPositions(line);
+});
+</script>
 </body>
 </html>
