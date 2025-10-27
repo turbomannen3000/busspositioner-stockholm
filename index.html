@@ -25,12 +25,12 @@
     <form id="line-form" class="row">
       <label for="line">Linje</label>
       <input id="line" placeholder="t.ex. 4" required inputmode="numeric" />
-      <button type="submit" title="Visa bussar">Visa</button>
+      <button id="go" type="submit" title="Visa bussar">Visa</button>
     </form>
     <div class="row">
       <label for="auto">Auto-uppdatera</label>
       <input id="auto" type="checkbox" />
-      <span class="pill" id="meta">redo</span>
+      <span class="pill" id="meta">laddar…</span>
     </div>
   </header>
 
@@ -60,109 +60,29 @@
   const VEH_URL = `${API_PROXY}/?url=${encodeURIComponent(VEH_URL_UPSTREAM)}`;
   const SL_ZIP  = `${API_PROXY}/?url=${encodeURIComponent(SL_ZIP_UPSTREAM)}`;
 
-  // =============== GTFS-Realtime .proto ===============
-  // Minimal, officiell proto (utdrag) som räcker för VehiclePosition
+  // =============== GTFS-Realtime .proto (utdrag som räcker för VehiclePositions) ===============
   const GTFS_PROTO = `
   syntax = "proto2";
   package transit_realtime;
-
-  message FeedMessage {
-    required FeedHeader header = 1;
-    repeated FeedEntity entity = 2;
-  }
-  message FeedHeader {
-    required string gtfs_realtime_version = 1;
-    optional Incrementality incrementality = 2 [default = FULL_DATASET];
-    optional uint64 timestamp = 3;
-    enum Incrementality {
-      FULL_DATASET = 0;
-      DIFFERENTIAL = 1;
-    }
-  }
-  message FeedEntity {
-    required string id = 1;
-    optional TripUpdate trip_update = 2;
-    optional VehiclePosition vehicle = 3;
-    optional Alert alert = 4;
-    optional bool is_deleted = 5 [default = false];
-  }
-
-  message TripDescriptor {
-    optional string trip_id = 1;
-    optional string route_id = 5;
-    optional int32 direction_id = 6;
-    enum ScheduleRelationship {
-      SCHEDULED = 0;
-      ADDED = 1;
-      UNSCHEDULED = 2;
-      CANCELED = 3;
-      REPLACEMENT = 5;
-      DUPLICATED = 6;
-    }
-    optional ScheduleRelationship schedule_relationship = 4 [default = SCHEDULED];
-    optional string start_time = 2;
-    optional string start_date = 3;
-  }
-
-  message VehicleDescriptor {
-    optional string id = 1;
-    optional string label = 2;
-    optional string license_plate = 3;
-  }
-
-  message Position {
-    optional float latitude = 1;
-    optional float longitude = 2;
-    optional float bearing = 3;
-    optional float odometer = 4;
-    optional float speed = 5;
-  }
-
+  message FeedMessage { required FeedHeader header = 1; repeated FeedEntity entity = 2; }
+  message FeedHeader { required string gtfs_realtime_version = 1; optional uint64 timestamp = 3; }
+  message FeedEntity { required string id = 1; optional VehiclePosition vehicle = 3; }
+  message TripDescriptor { optional string trip_id = 1; optional string route_id = 5; }
+  message VehicleDescriptor { optional string id = 1; optional string label = 2; }
+  message Position { optional float latitude = 1; optional float longitude = 2; optional float bearing = 3; }
   message VehiclePosition {
     optional TripDescriptor trip = 1;
-    optional VehicleDescriptor vehicle = 8;
     optional Position position = 2;
-    optional uint64 timestamp = 5;
-    optional CongestionLevel congestion_level = 6;
-    optional OccupancyStatus occupancy_status = 9;
-    enum CongestionLevel {
-      UNKNOWN_CONGESTION_LEVEL = 0;
-      RUNNING_SMOOTHLY = 1;
-      STOP_AND_GO = 2;
-      CONGESTION = 3;
-      SEVERE_CONGESTION = 4;
-    }
-    enum OccupancyStatus {
-      EMPTY = 0;
-      MANY_SEATS_AVAILABLE = 1;
-      FEW_SEATS_AVAILABLE = 2;
-      STANDING_ROOM_ONLY = 3;
-      CRUSHED_STANDING_ROOM_ONLY = 4;
-      FULL = 5;
-      NOT_ACCEPTING_PASSENGERS = 6;
-      NO_DATA_AVAILABLE = 7;
-      NOT_BOARDABLE = 8;
-    }
-    optional string stop_id = 7;
     optional int32 current_stop_sequence = 3;
-    enum VehicleStopStatus { INCOMING_AT = 0; STOPPED_AT = 1; IN_TRANSIT_TO = 2; }
-    optional VehicleStopStatus current_status = 4 [default = IN_TRANSIT_TO];
-  }
-
-  // Stubbar för fullständighet (vi använder dem inte i visningen)
-  message TripUpdate {}
-  message Alert {}
-  `;
-
-  // Bygg decoder från protot
+    optional uint64 timestamp = 5;
+    optional VehicleDescriptor vehicle = 8;
+  }`;
   const root = protobuf.parse(GTFS_PROTO).root;
   const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
 
   // =============== KARTA ===============
   const map = L.map("map").setView([59.3328, 18.0649], 12);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution:"© OpenStreetMap"
-  }).addTo(map);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution:"© OpenStreetMap" }).addTo(map);
 
   let markers = [];
   let ROUTES_BY_SHORT = new Map(); // '4' -> Set(route_id, ...)
@@ -173,8 +93,15 @@
   const $status = document.getElementById("status");
   const $meta   = document.getElementById("meta");
   const $auto   = document.getElementById("auto");
+  const $line   = document.getElementById("line");
+  const $go     = document.getElementById("go");
 
   const setStatus = (t) => { $status.textContent = t; console.log(t); };
+
+  // — Gatea UI tills statiken är klar —
+  let staticReadyResolve;
+  const staticReady = new Promise(res => (staticReadyResolve = res));
+  $line.disabled = true; $go.disabled = true;
 
   // =============== Ladda statisk GTFS (routes & trips) från sl.zip ===============
   async function loadStatic() {
@@ -208,7 +135,9 @@
       }
 
       setStatus(`Statiska filer klara: ${ROUTES_BY_SHORT.size} linjer, ${ROUTE_BY_TRIP.size} trips mappade.`);
-      $meta.textContent = "statiskt klart";
+      $meta.textContent = "redo";
+      $line.disabled = false; $go.disabled = false;
+      staticReadyResolve();
     } catch (err) {
       console.error(err);
       setStatus("Kunde inte ladda statisk data (sl.zip). Har din nyckel åtkomst? Annars använd Sweden-zip som fallback.");
@@ -237,9 +166,6 @@
       const bytes = new Uint8Array(buf);
       const feed = FeedMessage.decode(bytes);
 
-      // Lägg precis efter decode:
-      console.log(new Set((feed.entity||[]).map(e => e.vehicle?.trip?.route_id).filter(Boolean)));
-
       const want = new Set(routeIds);
       const vehicles = [];
 
@@ -248,10 +174,11 @@
         if (!v || !v.position) continue;
         const t = v.trip || {};
 
-        const byRouteId = t.route_id && want.has((t.route_id||"").trim());
+        // OBS: protobuf.js gör fälten camelCase → routeId / tripId
+        const byRouteId = t.routeId && want.has((t.routeId||"").trim());
         let byTrip = false;
-        if (!byRouteId && t.trip_id) {
-          const mapped = ROUTE_BY_TRIP.get((t.trip_id||"").trim());
+        if (!byRouteId && t.tripId) {
+          const mapped = ROUTE_BY_TRIP.get((t.tripId||"").trim());
           if (mapped && want.has(mapped)) byTrip = true;
         }
         if (byRouteId || byTrip) vehicles.push(v);
@@ -288,10 +215,12 @@
   }
 
   // =============== UI-händelser ===============
-  document.getElementById("line-form").addEventListener("submit", (e) => {
+  document.getElementById("line-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const line = document.getElementById("line").value.trim();
+    const line = $line.value.trim();
     if (!line) return;
+    // Vänta alltid in statisk inläsning (fixar race condition)
+    await staticReady;
     fetchPositions(line);
 
     if ($auto.checked) {
