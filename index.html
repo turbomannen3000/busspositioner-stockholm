@@ -1,100 +1,184 @@
 <!DOCTYPE html>
 <html lang="sv">
 <head>
-  <meta charset="utf-8">
-  <title>SL Bussar i realtid</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet/dist/leaflet.css"
-  />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SL-bussar i realtid</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
   <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { height: 90vh; }
-    form { padding: 10px; background: #eee; }
+    :root { --bg:#0b0c10; --panel:#151824; --text:#e9ecf1; --muted:#9aa4b2; --accent:#4f46e5; }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
+    header{padding:12px 16px;background:var(--panel);display:flex;gap:8px;align-items:center;position:sticky;top:0;z-index:2}
+    input,button{border:1px solid #23273a;background:#0f1320;color:var(--text);padding:10px 12px;border-radius:10px}
+    input{min-width:90px}
+    button{cursor:pointer}
+    #status{padding:8px 16px;color:var(--muted)}
+    #map{height:calc(100vh - 96px)}
+    .pill{display:inline-block;padding:2px 8px;border:1px solid #2a2f43;border-radius:999px;margin-left:6px;color:#cbd5e1}
   </style>
 </head>
 <body>
-  <form id="line-form">
-    <label for="line">Linje:</label>
-    <input id="line" placeholder="t.ex. 4" required>
-    <button>Sök</button>
-  </form>
+  <header>
+    <form id="line-form">
+      <label for="line">Linje&nbsp;</label>
+      <input id="line" placeholder="t.ex. 4" required inputmode="numeric" />
+      <button type="submit">Visa bussar</button>
+    </form>
+    <span id="meta" class="pill">redo</span>
+  </header>
+  <div id="status">Laddar statiska filer (routes & trips) första gången…</div>
   <div id="map"></div>
 
+  <!-- Libs -->
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pbf@3.2.1/dist/pbf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/gtfs-realtime-bindings@0.0.6/browser/gtfs-realtime-bindings.js"></script>
- <script>
-const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev/";
-const API_URL = "https://opendata.samtrafiken.se/gtfs-rt-sweden/sl/VehiclePositionsSweden.pb?key=424c69ac6f444e08bc367ad861c4e4ac";
-const ROUTES_URL = "./static/routes.txt"; // du lägger denna i din repo
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
-const map = L.map("map").setView([59.3293, 18.0686], 12);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "© OpenStreetMap"
-}).addTo(map);
+  <script>
+  // ====== KONFIG ======
+  const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev"; // din befintliga proxy
+  const TL_KEY = "424c69ac6f444e08bc367ad861c4e4ac"; // endast för test! flytta till Worker-env för skarpt bruk
+  const VEH_URL = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${TL_KEY}`; // GTFS Regional för SL
+  const SL_ZIP  = `https://opendata.samtrafiken.se/gtfs/sl/sl.zip?key=${TL_KEY}`;                  // statisk SL
 
-let markers = [];
-let routeMap = new Map();
+  // ====== KARTA ======
+  const map = L.map("map").setView([59.3328, 18.0649], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution:"© OpenStreetMap"
+  }).addTo(map);
 
-// Steg 1: Läs in routes.txt
-async function loadRoutes() {
-  const res = await fetch(ROUTES_URL);
-  const text = await res.text();
-  const lines = text.split("\n").slice(1);
-  for (let l of lines) {
-    const cols = l.split(",");
-    const route_id = cols[0];
-    const route_short_name = cols[2];
-    if (route_id && route_short_name) {
-      routeMap.set(route_short_name.trim(), route_id.trim());
+  let markers = [];
+  let ROUTES_BY_SHORT = new Map(); // '4' -> Set(route_id, route_id,…)
+  let ROUTE_BY_TRIP   = new Map(); // trip_id -> route_id
+  let currentLine = null;
+
+  const $status = document.getElementById("status");
+  const $meta   = document.getElementById("meta");
+
+  // ====== Hjälpare ======
+  const viaProxy = (u) => `${API_PROXY}/?url=${encodeURIComponent(u)}`;
+  const setStatus = (t) => { $status.textContent = t; console.log(t); };
+
+  // Läs in routes.txt och trips.txt ur sl.zip
+  async function loadStatic() {
+    setStatus("Hämtar sl.zip…");
+    const res = await fetch(viaProxy(SL_ZIP), { headers:{ "Accept-Encoding":"gzip, deflate, br" }});
+    if (!res.ok) throw new Error(`sl.zip misslyckades: ${res.status}`);
+    const buf = await res.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+
+    // routes.txt
+    const routesTxt = await zip.file("routes.txt").async("string");
+    const routes = Papa.parse(routesTxt, { header:true, skipEmptyLines:true }).data;
+    ROUTES_BY_SHORT = new Map();
+    for (const r of routes) {
+      const rid = (r.route_id||"").trim();
+      const short = (r.route_short_name||"").trim();
+      if (!rid || !short) continue;
+      if (!ROUTES_BY_SHORT.has(short)) ROUTES_BY_SHORT.set(short, new Set());
+      ROUTES_BY_SHORT.get(short).add(rid);
     }
-  }
-  console.log("Routes inlästa:", routeMap.size);
-}
 
-// Steg 2: Hämta fordon
-async function fetchPositions(line) {
-  const routeId = routeMap.get(line);
-  if (!routeId) {
-    alert("Ingen linje med det numret hittades i routes.txt");
-    return;
-  }
+    // trips.txt (för fallback: trip_id -> route_id)
+    const tripsTxt = await zip.file("trips.txt").async("string");
+    const trips = Papa.parse(tripsTxt, { header:true, skipEmptyLines:true }).data;
+    ROUTE_BY_TRIP = new Map();
+    for (const t of trips) {
+      const tripId = (t.trip_id||"").trim();
+      const routeId = (t.route_id||"").trim();
+      if (tripId && routeId) ROUTE_BY_TRIP.set(tripId, routeId);
+    }
 
-  const url = `${API_PROXY}/?url=${encodeURIComponent(API_URL)}`;
-  const res = await fetch(url);
-  const buf = await res.arrayBuffer();
-  const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Pbf(buf));
-  const vehicles = feed.entity
-    .filter(e => e.vehicle?.trip?.routeId === routeId)
-    .map(e => e.vehicle);
-
-  markers.forEach(m => map.removeLayer(m));
-  markers = [];
-
-  if (vehicles.length === 0) {
-    alert("Inga fordon hittades för linje " + line);
+    setStatus(`Statiska filer klara: ${ROUTES_BY_SHORT.size} linjer, ${ROUTE_BY_TRIP.size} trips mappade.`);
+    $meta.textContent = "statiskt klart";
   }
 
-  vehicles.forEach(v => {
-    const lat = v.position.latitude;
-    const lon = v.position.longitude;
-    const marker = L.marker([lat, lon])
-      .addTo(map)
-      .bindPopup(`Linje ${line}<br>Fordon: ${v.vehicle.id}`);
-    markers.push(marker);
+  // Hämta VehiclePositions och filtrera på linje
+  async function fetchPositions(lineShort) {
+    currentLine = lineShort;
+    const routeIds = ROUTES_BY_SHORT.get(lineShort);
+    if (!routeIds) {
+      setStatus(`Hittar ingen linje “${lineShort}” i routes.txt (kolla att det är exakt kortnamn).`);
+      return;
+    }
+
+    setStatus(`Hämtar positioner för linje ${lineShort}…`);
+    const res = await fetch(viaProxy(VEH_URL), { headers:{ "Accept-Encoding":"gzip, deflate, br" }});
+    if (!res.ok) {
+      setStatus(`Hämtning av VehiclePositions misslyckades: ${res.status}`);
+      return;
+    }
+    const buf = await res.arrayBuffer();
+    const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Pbf(buf));
+
+    const want = new Set(routeIds); // snabb lookup
+    const vehicles = [];
+
+    for (const ent of feed.entity) {
+      const v = ent.vehicle;
+      if (!v || !v.position) continue;
+      const t = v.trip || {};
+
+      // matcha antingen på trip.routeId eller via trip.tripId -> route_id
+      const routeIdFromFeed = (t.routeId||"").trim();
+      const byRouteId = routeIdFromFeed && want.has(routeIdFromFeed);
+
+      let byTrip = false;
+      if (!byRouteId && t.tripId) {
+        const mapped = ROUTE_BY_TRIP.get((t.tripId||"").trim());
+        if (mapped && want.has(mapped)) byTrip = true;
+      }
+
+      if (byRouteId || byTrip) vehicles.push(v);
+    }
+
+    // Rensa gamla markörer
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+
+    if (vehicles.length === 0) {
+      setStatus(`Inga aktiva fordon hittades just nu för linje ${lineShort}. (Kan vara serviceuppehåll / ändrat id.)`);
+      return;
+    }
+
+    const group = [];
+    for (const v of vehicles) {
+      const { latitude:lat, longitude:lon, bearing } = v.position;
+      const label = v.vehicle?.label || v.vehicle?.id || "okänt fordon";
+      const m = L.marker([lat, lon]).addTo(map)
+        .bindPopup(`<b>Linje ${lineShort}</b><br>Fordon: ${label}<br>Riktning: ${bearing ?? "–"}°`);
+      markers.push(m);
+      group.push([lat, lon]);
+    }
+    if (group.length) {
+      const bounds = L.latLngBounds(group);
+      map.fitBounds(bounds.pad(0.2));
+    }
+    setStatus(`Visar ${vehicles.length} fordon för linje ${lineShort}.`);
+    $meta.textContent = `linje ${lineShort}`;
+  }
+
+  // Event
+  document.getElementById("line-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const line = document.getElementById("line").value.trim();
+    if (!line) return;
+    fetchPositions(line);
   });
-}
 
-// Start
-loadRoutes();
-
-document.querySelector("#line-form").addEventListener("submit", e => {
-  e.preventDefault();
-  const line = document.querySelector("#line").value.trim();
-  fetchPositions(line);
-});
-</script>
+  // Init
+  (async () => {
+    try {
+      await loadStatic();
+      setStatus("Skriv ett linjenummer (t.ex. 4) och tryck Enter.");
+    } catch (err) {
+      console.error(err);
+      setStatus("Kunde inte ladda statisk data. Se konsol.");
+    }
+  })();
+  </script>
 </body>
 </html>
