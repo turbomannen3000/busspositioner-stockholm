@@ -18,7 +18,6 @@
     #status{padding:8px 14px;color:var(--muted)}
     #map{height:calc(100vh - 108px)}
     .pill{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border:1px solid #2a2f43;border-radius:999px;margin-left:6px;color:#cbd5e1}
-    .sep{opacity:.35}
   </style>
 </head>
 <body>
@@ -40,36 +39,126 @@
 
   <!-- Libs -->
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <!-- UMD som exponerar window.GtfsRealtimeBindings -->
-  <script src="https://cdn.jsdelivr.net/npm/gtfs-realtime-bindings@1.1.1/gtfs-realtime.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
 
   <script>
-  // ====== KONFIG ======
-  // Din Cloudflare-proxy (måste stödja binär pass-through och CORS)
+  // ================== KONFIG ==================
+  // Din Cloudflare-proxy (måste stödja binär pass-through + CORS: "*")
   const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev";
 
-  // 🔑 Om du INTE använder Workern nedan: fyll i dina riktiga nycklar här.
-  // (Annars spelar värdena ingen roll, de ersätts av Workern.)
-  const TL_RT_KEY     = "ac506a874e764f75a02d214788ec2124";     // ex: VehiclePositions (Realtime)
-  const TL_STATIC_KEY = "b2f9006366ce457dab592e5e3ca60410"; // ex: sl.zip (Static)
+  // 🔑 Trafiklab-nycklar (om du inte gömmer dem i Workern)
+  const TL_RT_KEY     = "ac506a874e764f75a02d214788ec2124";     // Realtime: VehiclePositions
+  const TL_STATIC_KEY = "b2f9006366ce457dab592e5e3ca60410"; // Static: sl.zip
 
-  // Upstream (används om du inte kör Workern som döljer nycklar)
+  // Upstream-URL:er (används via proxyn)
   const VEH_URL_UPSTREAM = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${TL_RT_KEY}`;
   const SL_ZIP_UPSTREAM  = `https://opendata.samtrafiken.se/gtfs/sl/sl.zip?key=${TL_STATIC_KEY}`;
 
-  // Om du använder Workern nedan, sätt USE_WORKER_ENDPOINTS = true
-  const USE_WORKER_ENDPOINTS = false; // ändra till true om du använder Workern här under
+  // Slutliga URL:er (proxade)
+  const VEH_URL = `${API_PROXY}/?url=${encodeURIComponent(VEH_URL_UPSTREAM)}`;
+  const SL_ZIP  = `${API_PROXY}/?url=${encodeURIComponent(SL_ZIP_UPSTREAM)}`;
 
-  // Worker-endpoints (om USE_WORKER_ENDPOINTS = true)
-  const VEH_URL_WORKER = `${API_PROXY}/trafiklab/rt/sl/vehiclepositions`;
-  const SL_ZIP_WORKER  = `${API_PROXY}/trafiklab/static/sl`;
+  // =============== GTFS-Realtime .proto ===============
+  // Minimal, officiell proto (utdrag) som räcker för VehiclePosition
+  const GTFS_PROTO = `
+  syntax = "proto2";
+  package transit_realtime;
 
-  const VEH_URL = USE_WORKER_ENDPOINTS ? VEH_URL_WORKER : `${API_PROXY}/?url=${encodeURIComponent(VEH_URL_UPSTREAM)}`;
-  const SL_ZIP  = USE_WORKER_ENDPOINTS ? SL_ZIP_WORKER  : `${API_PROXY}/?url=${encodeURIComponent(SL_ZIP_UPSTREAM)}`;
+  message FeedMessage {
+    required FeedHeader header = 1;
+    repeated FeedEntity entity = 2;
+  }
+  message FeedHeader {
+    required string gtfs_realtime_version = 1;
+    optional Incrementality incrementality = 2 [default = FULL_DATASET];
+    optional uint64 timestamp = 3;
+    enum Incrementality {
+      FULL_DATASET = 0;
+      DIFFERENTIAL = 1;
+    }
+  }
+  message FeedEntity {
+    required string id = 1;
+    optional TripUpdate trip_update = 2;
+    optional VehiclePosition vehicle = 3;
+    optional Alert alert = 4;
+    optional bool is_deleted = 5 [default = false];
+  }
 
-  // ====== KARTA ======
+  message TripDescriptor {
+    optional string trip_id = 1;
+    optional string route_id = 5;
+    optional int32 direction_id = 6;
+    enum ScheduleRelationship {
+      SCHEDULED = 0;
+      ADDED = 1;
+      UNSCHEDULED = 2;
+      CANCELED = 3;
+      REPLACEMENT = 5;
+      DUPLICATED = 6;
+    }
+    optional ScheduleRelationship schedule_relationship = 4 [default = SCHEDULED];
+    optional string start_time = 2;
+    optional string start_date = 3;
+  }
+
+  message VehicleDescriptor {
+    optional string id = 1;
+    optional string label = 2;
+    optional string license_plate = 3;
+  }
+
+  message Position {
+    optional float latitude = 1;
+    optional float longitude = 2;
+    optional float bearing = 3;
+    optional float odometer = 4;
+    optional float speed = 5;
+  }
+
+  message VehiclePosition {
+    optional TripDescriptor trip = 1;
+    optional VehicleDescriptor vehicle = 8;
+    optional Position position = 2;
+    optional uint64 timestamp = 5;
+    optional CongestionLevel congestion_level = 6;
+    optional OccupancyStatus occupancy_status = 9;
+    enum CongestionLevel {
+      UNKNOWN_CONGESTION_LEVEL = 0;
+      RUNNING_SMOOTHLY = 1;
+      STOP_AND_GO = 2;
+      CONGESTION = 3;
+      SEVERE_CONGESTION = 4;
+    }
+    enum OccupancyStatus {
+      EMPTY = 0;
+      MANY_SEATS_AVAILABLE = 1;
+      FEW_SEATS_AVAILABLE = 2;
+      STANDING_ROOM_ONLY = 3;
+      CRUSHED_STANDING_ROOM_ONLY = 4;
+      FULL = 5;
+      NOT_ACCEPTING_PASSENGERS = 6;
+      NO_DATA_AVAILABLE = 7;
+      NOT_BOARDABLE = 8;
+    }
+    optional string stop_id = 7;
+    optional int32 current_stop_sequence = 3;
+    enum VehicleStopStatus { INCOMING_AT = 0; STOPPED_AT = 1; IN_TRANSIT_TO = 2; }
+    optional VehicleStopStatus current_status = 4 [default = IN_TRANSIT_TO];
+  }
+
+  // Stubbar för fullständighet (vi använder dem inte i visningen)
+  message TripUpdate {}
+  message Alert {}
+  `;
+
+  // Bygg decoder från protot
+  const root = protobuf.parse(GTFS_PROTO).root;
+  const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
+
+  // =============== KARTA ===============
   const map = L.map("map").setView([59.3328, 18.0649], 12);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution:"© OpenStreetMap"
@@ -87,11 +176,11 @@
 
   const setStatus = (t) => { $status.textContent = t; console.log(t); };
 
-  // ====== Ladda statisk GTFS (routes & trips) från sl.zip ======
+  // =============== Ladda statisk GTFS (routes & trips) från sl.zip ===============
   async function loadStatic() {
     try {
       setStatus("Hämtar sl.zip…");
-      const res = await fetch(SL_ZIP, { headers:{ "Accept-Encoding":"gzip, deflate, br" }});
+      const res = await fetch(SL_ZIP);
       if (!res.ok) throw new Error(`sl.zip misslyckades: ${res.status}`);
       const buf = await res.arrayBuffer();
       const zip = await JSZip.loadAsync(buf);
@@ -122,12 +211,12 @@
       $meta.textContent = "statiskt klart";
     } catch (err) {
       console.error(err);
-      setStatus("Kunde inte ladda statisk data (sl.zip). Kontrollera att din nyckel har åtkomst eller använd Worker-endpoints.");
+      setStatus("Kunde inte ladda statisk data (sl.zip). Har din nyckel åtkomst? Annars använd Sweden-zip som fallback.");
       $meta.textContent = "fel statiskt";
     }
   }
 
-  // ====== Hämta realtidspositioner och filtrera på linje ======
+  // =============== Hämta realtidspositioner och filtrera på linje ===============
   async function fetchPositions(lineShort) {
     try {
       currentLine = lineShort;
@@ -138,21 +227,15 @@
       }
 
       setStatus(`Hämtar positioner för linje ${lineShort}…`);
-      const res = await fetch(VEH_URL, { headers:{ "Accept-Encoding":"gzip, deflate, br" }});
+      const res = await fetch(VEH_URL);
       if (!res.ok) {
         setStatus(`Hämtning av VehiclePositions misslyckades: ${res.status}`);
-        return;
-      }
-      // Säkerställ att bindings är laddade
-      if (!window.GtfsRealtimeBindings) {
-        console.error("GtfsRealtimeBindings saknas – kontrollera <script>-taggen till CDN.");
-        setStatus("Kritiskt fel: GTFS-RT-biblioteket saknas.");
         return;
       }
 
       const buf = await res.arrayBuffer();
       const bytes = new Uint8Array(buf);
-      const feed = GtfsRealtimeBindings.FeedMessage.decode(bytes);
+      const feed = FeedMessage.decode(bytes);
 
       const want = new Set(routeIds);
       const vehicles = [];
@@ -162,10 +245,10 @@
         if (!v || !v.position) continue;
         const t = v.trip || {};
 
-        const byRouteId = t.routeId && want.has((t.routeId||"").trim());
+        const byRouteId = t.route_id && want.has((t.route_id||"").trim());
         let byTrip = false;
-        if (!byRouteId && t.tripId) {
-          const mapped = ROUTE_BY_TRIP.get((t.tripId||"").trim());
+        if (!byRouteId && t.trip_id) {
+          const mapped = ROUTE_BY_TRIP.get((t.trip_id||"").trim());
           if (mapped && want.has(mapped)) byTrip = true;
         }
         if (byRouteId || byTrip) vehicles.push(v);
@@ -183,7 +266,7 @@
       const group = [];
       for (const v of vehicles) {
         const { latitude:lat, longitude:lon, bearing } = v.position;
-        const label = v.vehicle?.label || v.vehicle?.id || "okänt fordon";
+        const label = (v.vehicle && (v.vehicle.label || v.vehicle.id)) || "okänt fordon";
         const m = L.marker([lat, lon]).addTo(map)
           .bindPopup(`<b>Linje ${lineShort}</b><br>Fordon: ${label}<br>Riktning: ${bearing ?? "–"}°`);
         markers.push(m);
@@ -201,12 +284,13 @@
     }
   }
 
-  // ====== UI-händelser ======
+  // =============== UI-händelser ===============
   document.getElementById("line-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const line = document.getElementById("line").value.trim();
     if (!line) return;
     fetchPositions(line);
+
     if ($auto.checked) {
       if (autoTimer) clearInterval(autoTimer);
       autoTimer = setInterval(() => fetchPositions(line), 10000);
@@ -216,7 +300,7 @@
     }
   });
 
-  // ====== Init ======
+  // =============== Init ===============
   (async () => {
     await loadStatic();
     setStatus("Skriv ett linjenummer (t.ex. 4) och tryck Enter.");
