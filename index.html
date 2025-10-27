@@ -237,6 +237,9 @@
       const bytes = new Uint8Array(buf);
       const feed = FeedMessage.decode(bytes);
 
+      // Lägg precis efter decode:
+      console.log(new Set((feed.entity||[]).map(e => e.vehicle?.trip?.route_id).filter(Boolean)));
+
       const want = new Set(routeIds);
       const vehicles = [];
 
