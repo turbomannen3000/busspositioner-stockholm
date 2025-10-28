@@ -43,16 +43,18 @@
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
 
   <script>
   // ================== KONFIG ==================
-  // Din Cloudflare-proxy. Default enligt din preferens:
-  const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev"; // ev. byt till din buss-proxy
-  // Trafiklab-nycklar (om du inte gömmer dem i Workern)
+  // Prova denna först (bevarar ofta Content-Encoding):
+  const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev";
+  // Alt: använd din andra proxy om du vill
+  // const API_PROXY = "https://wradio-proxy.nyhet24-tokamak.workers.dev";
+
   const TL_RT_KEY     = "ac506a874e764f75a02d214788ec2124";     // GTFS Regional Realtime
   const TL_STATIC_KEY = "b2f9006366ce457dab592e5e3ca60410"; // GTFS Regional Static (sl.zip)
 
-  // Proxade upstream-URL:er
   const VEH_URL = `${API_PROXY}/?url=${encodeURIComponent(
     `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${TL_RT_KEY}`
   )}`;
@@ -101,6 +103,37 @@
   const root = protobuf.parse(GTFS_PROTO).root;
   const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
 
+  // =============== Hjälpare: binär fetch med robust dekomprimering ===============
+  async function fetchProtobuf(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const ab = await res.arrayBuffer();
+    let bytes = new Uint8Array(ab);
+
+    // Om proxyn tappat Content-Encoding men svaret är gzip/deflate → dekomprimera manuellt
+    const isGzip = bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+    const isZlib = bytes.length > 2 && bytes[0] === 0x78 && (bytes[1] === 0x9c || bytes[1] === 0x01 || bytes[1] === 0xda);
+    if (isGzip || isZlib) {
+      try {
+        const inflated = isGzip ? pako.ungzip(bytes) : pako.inflate(bytes);
+        bytes = new Uint8Array(inflated);
+      } catch (e) {
+        console.warn("Kunde inte dekomprimera – fortsätter med rådata:", e);
+      }
+    }
+
+    // Om det ändå verkar vara text/HTML → logga för felsökning
+    const first = String.fromCharCode(bytes[0]||0, bytes[1]||0, bytes[2]||0, bytes[3]||0);
+    if (first.includes("<") || first.includes("{")) {
+      try {
+        const text = new TextDecoder("utf-8").decode(bytes);
+        console.warn("Protobuf såg ut som text/HTML:\n", text.slice(0, 500));
+      } catch {}
+      throw new Error("Fick text/HTML istället för protobuf");
+    }
+    return bytes;
+  }
+
   // =============== KARTA & STATE ===============
   const map = L.map("map").setView([59.3328, 18.0649], 12);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution:"© OpenStreetMap" }).addTo(map);
@@ -124,16 +157,13 @@
   let staticReadyResolve; const staticReady = new Promise(res => (staticReadyResolve = res));
   $line.disabled = true; $go.disabled = true;
 
-  // —— Hjälpare —— //
   function guessShortFromRouteId(routeId) {
-    // SL-format: ofta 16 siffror; mittblock (index 8–11) innehåller linjenumret
     if (!/^\d{10,18}$/.test(routeId)) return null;
-    const mid = routeId.slice(8, 12);        // "0040" → 40
+    const mid = routeId.slice(8, 12);
     const n = parseInt(mid, 10);
     if (Number.isNaN(n)) return null;
-    return String(n % 10 === 0 ? n / 10 : n); // 0040 -> "4", 0401 -> "401"
+    return String(n % 10 === 0 ? n / 10 : n);
   }
-
   function shortFromTrip(trip) {
     if (!trip) return null;
     const rid = (trip.routeId || TRIP_TO_ROUTE.get((trip.tripId||"").trim()) || "").trim();
@@ -150,10 +180,9 @@
       const buf = await res.arrayBuffer();
       const zip = await JSZip.loadAsync(buf);
 
-      // routes.txt — robust parsing via Papa arrays (indexbaserat)
+      // routes.txt — indexbaserat (tål saknad route_long_name)
       const routesTxt = await zip.file("routes.txt").async("string");
       const routesParsed = Papa.parse(routesTxt, { header:false, skipEmptyLines:true }).data;
-      // förväntad header på rad 0: route_id,agency_id,route_short_name,route_long_name,route_type,route_desc
       ROUTES_BY_SHORT = new Map();
       SHORT_BY_ROUTE  = new Map();
       for (let i = 1; i < routesParsed.length; i++) {
@@ -167,7 +196,7 @@
         SHORT_BY_ROUTE.set(routeId, short);
       }
 
-      // trips.txt — också indexbaserat (header: route_id,service_id,trip_id,...)
+      // trips.txt — indexbaserat (header: route_id,service_id,trip_id,...)
       const tripsTxt = await zip.file("trips.txt").async("string");
       const tripsParsed = Papa.parse(tripsTxt, { header:false, skipEmptyLines:true }).data;
       TRIP_TO_ROUTE = new Map();
@@ -190,14 +219,12 @@
     }
   }
 
-  // =============== Hämta TripUpdates och bygg vehicle -> route (realtid) ===============
+  // =============== TripUpdates: bygg vehicle -> route (realtid) ===============
   async function loadTripUpdates() {
     try {
       VEHICLE_TO_ROUTE.clear();
-      const res = await fetch(TRIPUPD_URL);
-      if (!res.ok) { console.warn("TripUpdates misslyckades:", res.status); return; }
-      const buf = await res.arrayBuffer();
-      const fm = FeedMessage.decode(new Uint8Array(buf));
+      const bytes = await fetchProtobuf(TRIPUPD_URL);
+      const fm = FeedMessage.decode(bytes);
       for (const ent of (fm.entity || [])) {
         const tu = ent.tripUpdate;
         if (!tu) continue;
@@ -210,29 +237,19 @@
     }
   }
 
-  // =============== Hämta VehiclePositions & filtrera ===============
+  // =============== VehiclePositions & filtrering ===============
   async function fetchPositions(lineShort) {
     try {
-      await staticReady; // vänta in sl.zip
+      await staticReady;
       currentLine = lineShort;
-
       setStatus(`Hämtar positioner för linje ${lineShort}…`);
 
-      // Hämta båda feeds parallellt (TripUpdates först för mappning)
-      const [_, vehRes] = await Promise.all([
-        loadTripUpdates(),               // fyller VEHICLE_TO_ROUTE
-        fetch(VEH_URL)                   // VehiclePositions
-      ]);
-      if (!vehRes.ok) {
-        setStatus(`VehiclePositions misslyckades: ${vehRes.status}`);
-        return;
-      }
-
-      const bytes = new Uint8Array(await vehRes.arrayBuffer());
-      const feed = FeedMessage.decode(bytes);
+      // TripUpdates först (för mapping), sedan VehiclePositions
+      await loadTripUpdates();
+      const vehBytes = await fetchProtobuf(VEH_URL);
+      const feed = FeedMessage.decode(vehBytes);
       const entities = feed.entity || [];
 
-      // Bygg live-översikt av linjer i feeden
       const shortsNow = new Map();
       const vehicles = [];
 
@@ -240,7 +257,7 @@
         const v = ent.vehicle;
         if (!v || !v.position) continue;
 
-        // 1) Försök direkt från VehiclePositions.trip
+        // 1) Direkt från VehiclePositions.trip
         let s = shortFromTrip(v.trip);
 
         // 2) Fallback via TripUpdates (vehicle.id -> routeId -> short)
