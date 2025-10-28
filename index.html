@@ -18,6 +18,7 @@
     #status{padding:8px 14px;color:var(--muted)}
     #map{height:calc(100vh - 108px)}
     .pill{display:inline-flex;gap:6px;align-items:center;padding:2px 8px;border:1px solid #2a2f43;border-radius:999px;margin-left:6px;color:#cbd5e1}
+    .small{font-size:12px;opacity:.85}
   </style>
 </head>
 <body>
@@ -30,7 +31,7 @@
     <div class="row">
       <label for="auto">Auto-uppdatera</label>
       <input id="auto" type="checkbox" />
-      <span class="pill" id="meta">laddar…</span>
+      <span class="pill small" id="meta">laddar…</span>
     </div>
   </header>
 
@@ -45,11 +46,13 @@
 
   <script>
   // ================== KONFIG ==================
-  const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev"; // din proxy
-  const TL_RT_KEY     = "ac506a874e764f75a02d214788ec2124";     // Realtime: GTFS Regional
-  const TL_STATIC_KEY = "b2f9006366ce457dab592e5e3ca60410"; // Static: GTFS Regional sl.zip
+  // Din Cloudflare-proxy. Default enligt din preferens:
+  const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev"; // ev. byt till din buss-proxy
+  // Trafiklab-nycklar (om du inte gömmer dem i Workern)
+  const TL_RT_KEY     = "ac506a874e764f75a02d214788ec2124";     // GTFS Regional Realtime
+  const TL_STATIC_KEY = "b2f9006366ce457dab592e5e3ca60410"; // GTFS Regional Static (sl.zip)
 
-  // Upstream-URL:er (proxas i klienten om du inte gömmer nycklar i Workern)
+  // Proxade upstream-URL:er
   const VEH_URL = `${API_PROXY}/?url=${encodeURIComponent(
     `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${TL_RT_KEY}`
   )}`;
@@ -60,7 +63,7 @@
     `https://opendata.samtrafiken.se/gtfs/sl/sl.zip?key=${TL_STATIC_KEY}`
   )}`;
 
-  // =============== GTFS-Realtime .proto (VehiclePositions + TripUpdates minimal) ===============
+  // =============== Minimal GTFS-RT .proto (VehiclePositions + TripUpdates) ===============
   const GTFS_PROTO = `
   syntax = "proto2";
   package transit_realtime;
@@ -104,9 +107,9 @@
 
   let markers = [];
   let ROUTES_BY_SHORT = new Map();   // '4' -> Set(route_id, ...)
-  let ROUTE_BY_TRIP   = new Map();   // trip_id -> route_id
   let SHORT_BY_ROUTE  = new Map();   // route_id -> '4'
-  let VEHICLE_TO_ROUTE = new Map();  // vehicle.id -> route_id (från TripUpdates)
+  let TRIP_TO_ROUTE   = new Map();   // statiskt: trip_id -> route_id
+  let VEHICLE_TO_ROUTE = new Map();  // realtid: vehicle.id -> route_id (från TripUpdates)
   let currentLine = null;
   let autoTimer = null;
 
@@ -123,15 +126,17 @@
 
   // —— Hjälpare —— //
   function guessShortFromRouteId(routeId) {
-    if (!/^\d{16}$/.test(routeId)) return null;
+    // SL-format: ofta 16 siffror; mittblock (index 8–11) innehåller linjenumret
+    if (!/^\d{10,18}$/.test(routeId)) return null;
     const mid = routeId.slice(8, 12);        // "0040" → 40
     const n = parseInt(mid, 10);
     if (Number.isNaN(n)) return null;
     return String(n % 10 === 0 ? n / 10 : n); // 0040 -> "4", 0401 -> "401"
   }
+
   function shortFromTrip(trip) {
     if (!trip) return null;
-    const rid = (trip.routeId || ROUTE_BY_TRIP.get((trip.tripId||"").trim()) || "").trim();
+    const rid = (trip.routeId || TRIP_TO_ROUTE.get((trip.tripId||"").trim()) || "").trim();
     if (!rid) return null;
     return SHORT_BY_ROUTE.get(rid) || guessShortFromRouteId(rid) || null;
   }
@@ -145,31 +150,36 @@
       const buf = await res.arrayBuffer();
       const zip = await JSZip.loadAsync(buf);
 
-      // routes.txt
+      // routes.txt — robust parsing via Papa arrays (indexbaserat)
       const routesTxt = await zip.file("routes.txt").async("string");
-      const routes = Papa.parse(routesTxt, { header:true, skipEmptyLines:true }).data;
+      const routesParsed = Papa.parse(routesTxt, { header:false, skipEmptyLines:true }).data;
+      // förväntad header på rad 0: route_id,agency_id,route_short_name,route_long_name,route_type,route_desc
       ROUTES_BY_SHORT = new Map();
       SHORT_BY_ROUTE  = new Map();
-      for (const r of routes) {
-        const rid = (r.route_id||"").trim();
-        const short = (r.route_short_name||"").trim();
-        if (!rid || !short) continue;
+      for (let i = 1; i < routesParsed.length; i++) {
+        const row = routesParsed[i];
+        if (!row || row.length < 3) continue;
+        const routeId = String(row[0] ?? "").trim();
+        const short   = String(row[2] ?? "").trim();
+        if (!routeId || !short) continue;
         if (!ROUTES_BY_SHORT.has(short)) ROUTES_BY_SHORT.set(short, new Set());
-        ROUTES_BY_SHORT.get(short).add(rid);
-        SHORT_BY_ROUTE.set(rid, short);
+        ROUTES_BY_SHORT.get(short).add(routeId);
+        SHORT_BY_ROUTE.set(routeId, short);
       }
 
-      // trips.txt
+      // trips.txt — också indexbaserat (header: route_id,service_id,trip_id,...)
       const tripsTxt = await zip.file("trips.txt").async("string");
-      const trips = Papa.parse(tripsTxt, { header:true, skipEmptyLines:true }).data;
-      ROUTE_BY_TRIP = new Map();
-      for (const t of trips) {
-        const tripId = (t.trip_id||"").trim();
-        const routeId = (t.route_id||"").trim();
-        if (tripId && routeId) ROUTE_BY_TRIP.set(tripId, routeId);
+      const tripsParsed = Papa.parse(tripsTxt, { header:false, skipEmptyLines:true }).data;
+      TRIP_TO_ROUTE = new Map();
+      for (let i = 1; i < tripsParsed.length; i++) {
+        const row = tripsParsed[i];
+        if (!row || row.length < 3) continue;
+        const routeId = String(row[0] ?? "").trim();
+        const tripId  = String(row[2] ?? "").trim();
+        if (tripId && routeId) TRIP_TO_ROUTE.set(tripId, routeId);
       }
 
-      setStatus(`Statiska filer klara: ${ROUTES_BY_SHORT.size} linjer, ${ROUTE_BY_TRIP.size} trips mappade.`);
+      setStatus(`Statiska filer klara: ${ROUTES_BY_SHORT.size} linjer, ${TRIP_TO_ROUTE.size} trips mappade.`);
       $meta.textContent = "redo";
       $line.disabled = false; $go.disabled = false;
       staticReadyResolve();
@@ -180,19 +190,23 @@
     }
   }
 
-  // =============== Hämta TripUpdates och bygg vehicle -> route ===============
+  // =============== Hämta TripUpdates och bygg vehicle -> route (realtid) ===============
   async function loadTripUpdates() {
-    VEHICLE_TO_ROUTE.clear();
-    const res = await fetch(TRIPUPD_URL);
-    if (!res.ok) { console.warn("TripUpdates misslyckades:", res.status); return; }
-    const buf = await res.arrayBuffer();
-    const fm = FeedMessage.decode(new Uint8Array(buf));
-    for (const ent of (fm.entity || [])) {
-      const tu = ent.trip_update;
-      if (!tu) continue;
-      const rid = (tu.trip?.routeId || ROUTE_BY_TRIP.get((tu.trip?.tripId||"").trim()) || "").trim();
-      const vid = (tu.vehicle?.id || "").trim();
-      if (rid && vid) VEHICLE_TO_ROUTE.set(vid, rid);
+    try {
+      VEHICLE_TO_ROUTE.clear();
+      const res = await fetch(TRIPUPD_URL);
+      if (!res.ok) { console.warn("TripUpdates misslyckades:", res.status); return; }
+      const buf = await res.arrayBuffer();
+      const fm = FeedMessage.decode(new Uint8Array(buf));
+      for (const ent of (fm.entity || [])) {
+        const tu = ent.tripUpdate;
+        if (!tu) continue;
+        const rid = (tu.trip?.routeId || TRIP_TO_ROUTE.get((tu.trip?.tripId||"").trim()) || "").trim();
+        const vid = (tu.vehicle?.id || "").trim();
+        if (rid && vid) VEHICLE_TO_ROUTE.set(vid, rid);
+      }
+    } catch (err) {
+      console.warn("Kunde inte ladda/avkoda TripUpdates:", err);
     }
   }
 
@@ -204,10 +218,10 @@
 
       setStatus(`Hämtar positioner för linje ${lineShort}…`);
 
-      // Hämta båda feeds parallellt
-      const [vehRes, tripMapReady] = await Promise.all([
-        fetch(VEH_URL),
-        loadTripUpdates() // fyller VEHICLE_TO_ROUTE
+      // Hämta båda feeds parallellt (TripUpdates först för mappning)
+      const [_, vehRes] = await Promise.all([
+        loadTripUpdates(),               // fyller VEHICLE_TO_ROUTE
+        fetch(VEH_URL)                   // VehiclePositions
       ]);
       if (!vehRes.ok) {
         setStatus(`VehiclePositions misslyckades: ${vehRes.status}`);
@@ -226,10 +240,10 @@
         const v = ent.vehicle;
         if (!v || !v.position) continue;
 
-        // 1) Försök från trip-fält i VehiclePositions
+        // 1) Försök direkt från VehiclePositions.trip
         let s = shortFromTrip(v.trip);
 
-        // 2) Om tomt: slå upp via TripUpdates (vehicle.id -> routeId)
+        // 2) Fallback via TripUpdates (vehicle.id -> routeId -> short)
         if (!s && v.vehicle?.id) {
           const rid2 = VEHICLE_TO_ROUTE.get((v.vehicle.id||"").trim());
           if (rid2) s = SHORT_BY_ROUTE.get(rid2) || guessShortFromRouteId(rid2) || null;
