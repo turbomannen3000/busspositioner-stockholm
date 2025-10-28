@@ -43,200 +43,214 @@
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
 
-  <script>
-  // ================== KONFIG ==================
-  // Din Cloudflare-proxy (måste stödja binär pass-through + CORS: "*")
-  const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev";
+ <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
 
-  // 🔑 Trafiklab-nycklar (om du inte gömmer dem i Workern)
-  const TL_RT_KEY     = "ac506a874e764f75a02d214788ec2124";     // Realtime: VehiclePositions
-  const TL_STATIC_KEY = "b2f9006366ce457dab592e5e3ca60410"; // Static: sl.zip
+<script>
+// ================== KONFIG ==================
+const API_PROXY = "https://buss-proxy.nyhet24-tokamak.workers.dev";
+const TL_RT_KEY     = "ac506a874e764f75a02d214788ec2124";
+const TL_STATIC_KEY = "b2f9006366ce457dab592e5e3ca60410";
 
-  // Upstream-URL:er (används via proxyn)
-  const VEH_URL_UPSTREAM = `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${TL_RT_KEY}`;
-  const SL_ZIP_UPSTREAM  = `https://opendata.samtrafiken.se/gtfs/sl/sl.zip?key=${TL_STATIC_KEY}`;
+const VEH_URL = `${API_PROXY}/?url=${encodeURIComponent(
+  `https://opendata.samtrafiken.se/gtfs-rt/sl/VehiclePositions.pb?key=${TL_RT_KEY}`
+)}`;
+const SL_ZIP  = `${API_PROXY}/?url=${encodeURIComponent(
+  `https://opendata.samtrafiken.se/gtfs/sl/sl.zip?key=${TL_STATIC_KEY}`
+)}`;
 
-  // Slutliga URL:er (proxade)
-  const VEH_URL = `${API_PROXY}/?url=${encodeURIComponent(VEH_URL_UPSTREAM)}`;
-  const SL_ZIP  = `${API_PROXY}/?url=${encodeURIComponent(SL_ZIP_UPSTREAM)}`;
+// =============== GTFS-Realtime .proto (utdrag) ===============
+const GTFS_PROTO = `
+syntax = "proto2";
+package transit_realtime;
+message FeedMessage { required FeedHeader header = 1; repeated FeedEntity entity = 2; }
+message FeedHeader { required string gtfs_realtime_version = 1; optional uint64 timestamp = 3; }
+message FeedEntity { required string id = 1; optional VehiclePosition vehicle = 3; }
+message TripDescriptor { optional string trip_id = 1; optional string route_id = 5; }
+message VehicleDescriptor { optional string id = 1; optional string label = 2; }
+message Position { optional float latitude = 1; optional float longitude = 2; optional float bearing = 3; }
+message VehiclePosition {
+  optional TripDescriptor trip = 1;
+  optional Position position = 2;
+  optional int32 current_stop_sequence = 3;
+  optional uint64 timestamp = 5;
+  optional VehicleDescriptor vehicle = 8;
+}`;
+const root = protobuf.parse(GTFS_PROTO).root;
+const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
 
-  // =============== GTFS-Realtime .proto (utdrag som räcker för VehiclePositions) ===============
-  const GTFS_PROTO = `
-  syntax = "proto2";
-  package transit_realtime;
-  message FeedMessage { required FeedHeader header = 1; repeated FeedEntity entity = 2; }
-  message FeedHeader { required string gtfs_realtime_version = 1; optional uint64 timestamp = 3; }
-  message FeedEntity { required string id = 1; optional VehiclePosition vehicle = 3; }
-  message TripDescriptor { optional string trip_id = 1; optional string route_id = 5; }
-  message VehicleDescriptor { optional string id = 1; optional string label = 2; }
-  message Position { optional float latitude = 1; optional float longitude = 2; optional float bearing = 3; }
-  message VehiclePosition {
-    optional TripDescriptor trip = 1;
-    optional Position position = 2;
-    optional int32 current_stop_sequence = 3;
-    optional uint64 timestamp = 5;
-    optional VehicleDescriptor vehicle = 8;
-  }`;
-  const root = protobuf.parse(GTFS_PROTO).root;
-  const FeedMessage = root.lookupType("transit_realtime.FeedMessage");
+// =============== KARTA & STATE ===============
+const map = L.map("map").setView([59.3328, 18.0649], 12);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution:"© OpenStreetMap" }).addTo(map);
 
-  // =============== KARTA ===============
-  const map = L.map("map").setView([59.3328, 18.0649], 12);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution:"© OpenStreetMap" }).addTo(map);
+let markers = [];
+let ROUTES_BY_SHORT = new Map();   // '4' -> Set(route_id, ...)
+let ROUTE_BY_TRIP   = new Map();   // trip_id -> route_id
+let SHORT_BY_ROUTE  = new Map();   // route_id -> '4'
+let currentLine = null;
+let autoTimer = null;
 
-  let markers = [];
-  let ROUTES_BY_SHORT = new Map(); // '4' -> Set(route_id, ...)
-  let ROUTE_BY_TRIP   = new Map(); // trip_id -> route_id
-  let currentLine = null;
-  let autoTimer = null;
+const $status = document.getElementById("status");
+const $meta   = document.getElementById("meta");
+const $auto   = document.getElementById("auto");
+const $line   = document.getElementById("line");
+const $go     = document.getElementById("go");
+const setStatus = (t) => { $status.textContent = t; console.log(t); };
 
-  const $status = document.getElementById("status");
-  const $meta   = document.getElementById("meta");
-  const $auto   = document.getElementById("auto");
-  const $line   = document.getElementById("line");
-  const $go     = document.getElementById("go");
+// Gatea UI tills statiken är klar
+let staticReadyResolve;
+const staticReady = new Promise(res => (staticReadyResolve = res));
+$line.disabled = true; $go.disabled = true;
 
-  const setStatus = (t) => { $status.textContent = t; console.log(t); };
+// =============== Hjälpare ===============
+// Heuristik för SL-route_id → linjenummer (t.ex. 9011001000400000 → "4")
+function guessShortFromRouteId(routeId) {
+  if (!/^\d{16}$/.test(routeId)) return null;
+  const mid = routeId.slice(8, 12);       // "0040" för linje 4
+  const n = parseInt(mid, 10);
+  if (Number.isNaN(n)) return null;
+  return String(n % 10 === 0 ? n / 10 : n); // 0040 -> 4, 0401 -> 401
+}
 
-  // — Gatea UI tills statiken är klar —
-  let staticReadyResolve;
-  const staticReady = new Promise(res => (staticReadyResolve = res));
-  $line.disabled = true; $go.disabled = true;
+// Räkna ut linjenummer (short) för ett fordon från dess trip-info
+function shortFromTrip(trip) {
+  if (!trip) return null;
+  const rid = (trip.routeId || ROUTE_BY_TRIP.get((trip.tripId||"").trim()) || "").trim();
+  if (!rid) return null;
+  return SHORT_BY_ROUTE.get(rid) || guessShortFromRouteId(rid) || null;
+}
 
-  // =============== Ladda statisk GTFS (routes & trips) från sl.zip ===============
-  async function loadStatic() {
-    try {
-      setStatus("Hämtar sl.zip…");
-      const res = await fetch(SL_ZIP);
-      if (!res.ok) throw new Error(`sl.zip misslyckades: ${res.status}`);
-      const buf = await res.arrayBuffer();
-      const zip = await JSZip.loadAsync(buf);
+// =============== Ladda statisk GTFS (routes & trips) ===============
+async function loadStatic() {
+  try {
+    setStatus("Hämtar sl.zip…");
+    const res = await fetch(SL_ZIP);
+    if (!res.ok) throw new Error(`sl.zip misslyckades: ${res.status}`);
+    const buf = await res.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
 
-      // routes.txt
-      const routesTxt = await zip.file("routes.txt").async("string");
-      const routes = Papa.parse(routesTxt, { header:true, skipEmptyLines:true }).data;
-      ROUTES_BY_SHORT = new Map();
-      for (const r of routes) {
-        const rid = (r.route_id||"").trim();
-        const short = (r.route_short_name||"").trim();
-        if (!rid || !short) continue;
-        if (!ROUTES_BY_SHORT.has(short)) ROUTES_BY_SHORT.set(short, new Set());
-        ROUTES_BY_SHORT.get(short).add(rid);
-      }
-
-      // trips.txt (trip_id -> route_id för fallback)
-      const tripsTxt = await zip.file("trips.txt").async("string");
-      const trips = Papa.parse(tripsTxt, { header:true, skipEmptyLines:true }).data;
-      ROUTE_BY_TRIP = new Map();
-      for (const t of trips) {
-        const tripId = (t.trip_id||"").trim();
-        const routeId = (t.route_id||"").trim();
-        if (tripId && routeId) ROUTE_BY_TRIP.set(tripId, routeId);
-      }
-
-      setStatus(`Statiska filer klara: ${ROUTES_BY_SHORT.size} linjer, ${ROUTE_BY_TRIP.size} trips mappade.`);
-      $meta.textContent = "redo";
-      $line.disabled = false; $go.disabled = false;
-      staticReadyResolve();
-    } catch (err) {
-      console.error(err);
-      setStatus("Kunde inte ladda statisk data (sl.zip). Har din nyckel åtkomst? Annars använd Sweden-zip som fallback.");
-      $meta.textContent = "fel statiskt";
+    // routes.txt → bygg både SHORT->SET(route_id) och ROUTE_ID->SHORT
+    const routesTxt = await zip.file("routes.txt").async("string");
+    const routes = Papa.parse(routesTxt, { header:true, skipEmptyLines:true }).data;
+    ROUTES_BY_SHORT = new Map();
+    SHORT_BY_ROUTE  = new Map();
+    for (const r of routes) {
+      const rid = (r.route_id||"").trim();
+      const short = (r.route_short_name||"").trim();
+      if (!rid || !short) continue;
+      if (!ROUTES_BY_SHORT.has(short)) ROUTES_BY_SHORT.set(short, new Set());
+      ROUTES_BY_SHORT.get(short).add(rid);
+      SHORT_BY_ROUTE.set(rid, short);
     }
+
+    // trips.txt → trip_id -> route_id (fallback)
+    const tripsTxt = await zip.file("trips.txt").async("string");
+    const trips = Papa.parse(tripsTxt, { header:true, skipEmptyLines:true }).data;
+    ROUTE_BY_TRIP = new Map();
+    for (const t of trips) {
+      const tripId = (t.trip_id||"").trim();
+      const routeId = (t.route_id||"").trim();
+      if (tripId && routeId) ROUTE_BY_TRIP.set(tripId, routeId);
+    }
+
+    setStatus(`Statiska filer klara: ${ROUTES_BY_SHORT.size} linjer, ${ROUTE_BY_TRIP.size} trips mappade.`);
+    $meta.textContent = "redo";
+    $line.disabled = false; $go.disabled = false;
+    staticReadyResolve();
+  } catch (err) {
+    console.error(err);
+    setStatus("Kunde inte ladda statisk data (sl.zip). Har din nyckel åtkomst? Alternativt använd Sweden-zip som fallback.");
+    $meta.textContent = "fel statiskt";
   }
+}
 
-  // =============== Hämta realtidspositioner och filtrera på linje ===============
-  async function fetchPositions(lineShort) {
-    try {
-      currentLine = lineShort;
-      const routeIds = ROUTES_BY_SHORT.get(lineShort);
-      if (!routeIds) {
-        setStatus(`Hittar ingen linje “${lineShort}” i routes.txt (använd kortnamn, t.ex. 4).`);
-        return;
-      }
+// =============== Hämta realtid & filtrera ===============
+async function fetchPositions(lineShort) {
+  try {
+    await staticReady; // säkerställ att statiken är laddad
+    currentLine = lineShort;
 
-      setStatus(`Hämtar positioner för linje ${lineShort}…`);
-      const res = await fetch(VEH_URL);
-      if (!res.ok) {
-        setStatus(`Hämtning av VehiclePositions misslyckades: ${res.status}`);
-        return;
-      }
-
-      const buf = await res.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      const feed = FeedMessage.decode(bytes);
-
-      const want = new Set(routeIds);
-      const vehicles = [];
-
-      for (const ent of (feed.entity || [])) {
-        const v = ent.vehicle;
-        if (!v || !v.position) continue;
-        const t = v.trip || {};
-
-        // OBS: protobuf.js gör fälten camelCase → routeId / tripId
-        const byRouteId = t.routeId && want.has((t.routeId||"").trim());
-        let byTrip = false;
-        if (!byRouteId && t.tripId) {
-          const mapped = ROUTE_BY_TRIP.get((t.tripId||"").trim());
-          if (mapped && want.has(mapped)) byTrip = true;
-        }
-        if (byRouteId || byTrip) vehicles.push(v);
-      }
-
-      // Rensa och rita
-      markers.forEach(m => map.removeLayer(m));
-      markers = [];
-
-      if (vehicles.length === 0) {
-        setStatus(`Inga aktiva fordon hittades just nu för linje ${lineShort}. Prova igen strax eller testa en annan linje.`);
-        return;
-      }
-
-      const group = [];
-      for (const v of vehicles) {
-        const { latitude:lat, longitude:lon, bearing } = v.position;
-        const label = (v.vehicle && (v.vehicle.label || v.vehicle.id)) || "okänt fordon";
-        const m = L.marker([lat, lon]).addTo(map)
-          .bindPopup(`<b>Linje ${lineShort}</b><br>Fordon: ${label}<br>Riktning: ${bearing ?? "–"}°`);
-        markers.push(m);
-        group.push([lat, lon]);
-      }
-      if (group.length) {
-        const bounds = L.latLngBounds(group);
-        map.fitBounds(bounds.pad(0.2));
-      }
-      setStatus(`Visar ${vehicles.length} fordon för linje ${lineShort}.`);
-      $meta.textContent = `linje ${lineShort}`;
-    } catch (err) {
-      console.error(err);
-      setStatus("Kunde inte hämta/avkoda realtid. Se konsolen.");
+    setStatus(`Hämtar positioner för linje ${lineShort}…`);
+    const res = await fetch(VEH_URL);
+    if (!res.ok) {
+      setStatus(`Hämtning av VehiclePositions misslyckades: ${res.status}`);
+      return;
     }
+
+    const buf = await res.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    const feed = FeedMessage.decode(bytes);
+    const entities = feed.entity || [];
+
+    // Debug: vilka routeId/short finns i feeden just nu?
+    const shortsNow = new Map();
+    for (const e of entities) {
+      const s = shortFromTrip(e.vehicle?.trip);
+      if (s) shortsNow.set(s, (shortsNow.get(s) || 0) + 1);
+    }
+    console.log("Aktiva linjer just nu (short -> count):", Object.fromEntries(shortsNow));
+
+    const vehicles = [];
+    for (const ent of entities) {
+      const v = ent.vehicle;
+      if (!v || !v.position) continue;
+      const s = shortFromTrip(v.trip);
+      if (s === lineShort) vehicles.push(v);
+    }
+
+    // Rensa & rita
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+
+    if (vehicles.length === 0) {
+      setStatus(`Inga aktiva fordon hittades just nu för linje ${lineShort}. (Aktiva linjer nu: ${[...shortsNow.keys()].slice(0,12).join(", ") || "okänt"})`);
+      return;
+    }
+
+    const group = [];
+    for (const v of vehicles) {
+      const { latitude:lat, longitude:lon, bearing } = v.position;
+      const label = (v.vehicle && (v.vehicle.label || v.vehicle.id)) || "okänt fordon";
+      const m = L.marker([lat, lon]).addTo(map)
+        .bindPopup(`<b>Linje ${lineShort}</b><br>Fordon: ${label}<br>Riktning: ${bearing ?? "–"}°`);
+      markers.push(m);
+      group.push([lat, lon]);
+    }
+    if (group.length) {
+      const bounds = L.latLngBounds(group);
+      map.fitBounds(bounds.pad(0.2));
+    }
+    setStatus(`Visar ${vehicles.length} fordon för linje ${lineShort}.`);
+    $meta.textContent = `linje ${lineShort}`;
+  } catch (err) {
+    console.error(err);
+    setStatus("Kunde inte hämta/avkoda realtid. Se konsolen.");
   }
+}
 
-  // =============== UI-händelser ===============
-  document.getElementById("line-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const line = $line.value.trim();
-    if (!line) return;
-    // Vänta alltid in statisk inläsning (fixar race condition)
-    await staticReady;
-    fetchPositions(line);
+// =============== UI ===============
+document.getElementById("line-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const line = $line.value.trim();
+  if (!line) return;
+  await fetchPositions(line);
 
-    if ($auto.checked) {
-      if (autoTimer) clearInterval(autoTimer);
-      autoTimer = setInterval(() => fetchPositions(line), 10000);
-    } else if (autoTimer) {
-      clearInterval(autoTimer);
-      autoTimer = null;
-    }
-  });
+  if ($auto.checked) {
+    if (autoTimer) clearInterval(autoTimer);
+    autoTimer = setInterval(() => fetchPositions(line), 10000);
+  } else if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+  }
+});
 
-  // =============== Init ===============
-  (async () => {
-    await loadStatic();
-    setStatus("Skriv ett linjenummer (t.ex. 4) och tryck Enter.");
-  })();
-  </script>
+// =============== Init ===============
+(async () => {
+  await loadStatic();
+  setStatus("Skriv ett linjenummer (t.ex. 4) och tryck Enter.");
+})();
+</script>
 </body>
 </html>
